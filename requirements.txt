@@ -6,3 +6,4 @@ PyMuPDF
 scikit-learn
 sentence-transformers
 torch
+fpdf
