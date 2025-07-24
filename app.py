@@ -5,12 +5,10 @@ import pandas as pd
 import fitz  # PyMuPDF
 from docx import Document
 from io import BytesIO
-from fpdf import FPDF
 from sentence_transformers import SentenceTransformer, util
 
-model = SentenceTransformer('all-MiniLM-L6-v2')
-
-# ========== File Extractors ==========
+# ✅ Force model to load on CPU to avoid Streamlit cloud errors
+model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
 
 def extract_text_from_pdf(file):
     with fitz.open(stream=file.read(), filetype="pdf") as doc:
@@ -21,7 +19,7 @@ def extract_text_from_docx(file):
     return "\n".join([para.text for para in doc.paragraphs])
 
 def extract_text_from_txt(file):
-    return file.read().decode("utf-8", errors="ignore")
+    return file.read().decode("utf-8")
 
 def extract_text(file):
     filename = file.name.lower()
@@ -34,94 +32,76 @@ def extract_text(file):
     else:
         return ""
 
-# ========== Similarity Scoring ==========
-
 def compute_similarity(jd_text, resume_text):
     jd_emb = model.encode(jd_text, convert_to_tensor=True)
     resume_emb = model.encode(resume_text, convert_to_tensor=True)
     score = util.cos_sim(jd_emb, resume_emb).item()
     return round(score * 100, 2)
 
-# ========== Candidate Detail Extractor ==========
-
-def extract_candidate_name(text):
-    # Clean and limit to top part of resume
-    top_text = text[:1000].replace('\n', ' ').replace('\r', '').strip()
-
-    # 1. Direct label match: Name: John Doe
-    name_match = re.search(r"\bName\s*[:\-]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", top_text)
+def extract_candidate_details(text):
+    clean_text = re.sub(r'\s+', ' ', text)
+    
+    # 🌟 Improved Name Detection
+    name = ""
+    name_match = re.search(r"Name\s*[:\-]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", clean_text)
     if name_match:
-        return name_match.group(1)
+        name = name_match.group(1)
+    else:
+        # Fallback 1: Top-most lines with 2+ capitalized words
+        lines = text.splitlines()
+        for line in lines[:5]:
+            probable = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", line)
+            if probable:
+                name = probable[0]
+                break
+        # Fallback 2: First bold or all-uppercase large word-like chunks (if HTML/parsing available — skipped here)
 
-    # 2. Try to find first few capitalized words near top that don't match keywords
-    lines = text.strip().split('\n')[:20]  # Only top part of resume
-    lines = [line.strip() for line in lines if line.strip()]
-    skip_keywords = ['Resume', 'Curriculum Vitae', 'CV', 'Profile', 'Email', 'Phone', 'Contact', 'Mobile']
-    potential_names = []
-
-    for line in lines:
-        if any(word.lower() in line.lower() for word in skip_keywords):
-            continue
-        # Match 2-3 capitalized words (common for names)
-        match = re.match(r"^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})$", line.strip())
-        if match:
-            potential_names.append(match.group(1))
-
-    if potential_names:
-        return potential_names[0]
-
-    # 3. Backup fallback: match first multi-capitalized word sequence in top text
-    match = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", top_text)
-    if match:
-        return match.group(1)
-
-    return ""
-
-
-    # Email and phone
-    email = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clean_text)
-    phone = re.search(r"(?:\+91[-\s]?|0)?[6-9]\d{9}", clean_text)
-
-    # Experience
+    email = ""
+    phone = ""
     experience = ""
-    exp_match = re.search(r"(?:\bExp(?:erience)?\b\s*[:\-]?\s*)(\d+\.?\d*)\s*(?:years|yrs)?", clean_text, re.I)
-    if not exp_match:
-        exp_match = re.search(r"(\d+\.?\d*)\s*(?:years|yrs)\s+of\s+experience", clean_text, re.I)
-    if exp_match:
-        experience = exp_match.group(1)
-
-    # Location
-    location_match = re.search(r"\bLocation\s*[:\-]?\s*([A-Za-z ,]+)", clean_text, re.I)
-    location = location_match.group(1).strip() if location_match else ""
-
-    # Current company
-    company = ""
-    company_match = re.search(r"(?:Currently working at|Current Company|Company Name)\s*[:\-]?\s*(.+?)(?:\n|\.|,|$)", text, re.I)
-    if company_match:
-        company = company_match.group(1).strip()
-
-    # CTC and ECTC
+    location = ""
+    current_company = ""
     ctc = ""
     ectc = ""
-    ctc_match = re.search(r"\bCTC\s*[:\-]?\s*₹?(\d+[.,]?\d*)", clean_text, re.I)
-    ectc_match = re.search(r"\b(?:Expected|ECTC)\s*[:\-]?\s*₹?(\d+[.,]?\d*)", clean_text, re.I)
+
+    email_match = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text)
+    if email_match:
+        email = email_match[0]
+
+    phone_match = re.findall(r"(?:\+91[-\s]?|0)?[6-9]\d{9}", text)
+    if phone_match:
+        phone = phone_match[0]
+
+    exp_match = re.findall(r"(\d+\.?\d*)\s+(?:years?|yrs?)\s+of\s+experience", text, re.I)
+    if exp_match:
+        experience = exp_match[0]
+
+    location_match = re.findall(r"Location[:\- ]*(.*)", text, re.I)
+    if location_match:
+        location = location_match[0].strip().split("\n")[0]
+
+    company_match = re.findall(r"(?:Currently\s+at|Working\s+at|Employer[:\- ]*)(.*)", text, re.I)
+    if company_match:
+        current_company = company_match[0].strip().split("\n")[0]
+
+    ctc_match = re.findall(r"CTC[:\- ]*₹?(\d+[.,]?\d*)", text, re.I)
     if ctc_match:
-        ctc = ctc_match.group(1)
+        ctc = ctc_match[0]
+
+    ectc_match = re.findall(r"(?:Expected\s*CTC|ECTC)[:\- ]*₹?(\d+[.,]?\d*)", text, re.I)
     if ectc_match:
-        ectc = ectc_match.group(1)
+        ectc = ectc_match[0]
 
     return {
         "Name": name,
-        "Email": email.group(0) if email else "",
-        "Mobile": phone.group(0) if phone else "",
+        "Email": email,
+        "Mobile": phone,
         "Experience": experience,
         "Location": location,
-        "Current Company": company,
+        "Current Company": current_company,
         "CTC": ctc,
         "ECTC": ectc
     }
-
-# ========== Streamlit App ==========
 
 def main():
     st.set_page_config(layout="wide")
@@ -141,29 +121,32 @@ def main():
         data = []
 
         for resume_file in resumes:
-            resume_text = extract_text(resume_file)
-            similarity = compute_similarity(jd_text, resume_text)
-            details = extract_candidate_details(resume_text)
-            details["Similarity %"] = similarity
-            data.append(details)
+            try:
+                resume_text = extract_text(resume_file)
+                similarity = compute_similarity(jd_text, resume_text)
+                details = extract_candidate_details(resume_text)
+                details["Similarity %"] = similarity
+                data.append(details)
+            except Exception as e:
+                st.warning(f"❌ Could not process {resume_file.name}: {e}")
 
-        df = pd.DataFrame(data)
-        df = df.sort_values(by="Similarity %", ascending=False)
+        if data:
+            df = pd.DataFrame(data)
+            df = df.sort_values(by="Similarity %", ascending=False)
 
-        st.markdown("### 📊 Ranked Candidates")
-        st.dataframe(df, use_container_width=True)
+            st.markdown("### 📊 Candidate Ranking")
+            st.dataframe(df, use_container_width=True)
 
-        # Excel Export
-        excel_buffer = BytesIO()
-        df.to_excel(excel_buffer, index=False)
-        excel_buffer.seek(0)
+            excel_buffer = BytesIO()
+            df.to_excel(excel_buffer, index=False)
+            excel_buffer.seek(0)
 
-        st.download_button(
-            "⬇ Download Excel Report",
-            data=excel_buffer,
-            file_name="ranked_candidates.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+            st.download_button(
+                "⬇ Download Excel",
+                data=excel_buffer,
+                file_name="ranked_candidates.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 if __name__ == "__main__":
     main()
