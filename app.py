@@ -38,49 +38,34 @@ def compute_similarity(jd_text, resume_text):
     score = util.cos_sim(jd_emb, resume_emb).item()
     return round(score * 100, 2)
 
-def extract_candidate_details(text):
-    clean_text = re.sub(r'\s+', ' ', text)
-    
-    # 🌟 Improved Name Detection
+def extract_candidate_details(text, jd_text=""):
+    clean_text = text.strip().replace('\n', ' ')
     name = ""
     name_match = re.search(r"Name\s*[:\-]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", clean_text)
     if name_match:
         name = name_match.group(1)
     else:
-        # Fallback 1: Top-most lines with 2+ capitalized words
-        lines = text.splitlines()
-        for line in lines[:5]:
-            probable = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", line)
-            if probable:
-                name = probable[0]
-                break
-        # Fallback 2: First bold or all-uppercase large word-like chunks (if HTML/parsing available — skipped here)
+        name_match = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", clean_text)
+        if name_match:
+            name = name_match[0]
 
-    email = ""
-    phone = ""
+    email_match = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clean_text)
+    phone_match = re.findall(r"(?:\+91[-\s]?|0)?[6-9]\d{9}", clean_text)
+
+    email = email_match[0] if email_match else ""
+    phone = phone_match[0] if phone_match else ""
+
+    # Experience
     experience = ""
-    location = ""
-    current_company = ""
-    ctc = ""
-    ectc = ""
-
-    email_match = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text)
-    if email_match:
-        email = email_match[0]
-
-    phone_match = re.findall(r"(?:\+91[-\s]?|0)?[6-9]\d{9}", text)
-    if phone_match:
-        phone = phone_match[0]
-
-    exp_match = re.findall(r"(\d+\.?\d*)\s+(?:years?|yrs?)\s+of\s+experience", text, re.I)
+    exp_match = re.findall(r"(\d+\.?\d*)\s+(?:years?|yrs?)\s+of\s+experience", clean_text, re.I)
     if exp_match:
         experience = exp_match[0]
 
-    location_match = re.findall(r"Location[:\- ]*(.*)", text, re.I)
-    if location_match:
-        location = location_match[0].strip().split("\n")[0]
+    # Location
+    location_match = re.findall(r"Location[:\- ]*(.*)", clean_text, re.I)
+    location = location_match[0].strip() if location_match else ""
 
-       # 🌟 Improved Current Company Extraction
+    # Improved Current Company Extraction
     current_company = ""
     company_patterns = [
         r"(?:currently\s+(?:working|employed)\s+(?:at|with)\s*)([A-Z][\w&.,\- ]+)",
@@ -90,21 +75,57 @@ def extract_candidate_details(text):
         r"(?:experience\s*[:\- ]*)([A-Z][\w&.,\- ]+)",
         r"(?:professional\s+experience.*?)\b([A-Z][\w&.,\- ]+)\b.*?(?:present|current|till date)",
     ]
-
     for pattern in company_patterns:
-        match = re.search(pattern, text, re.I | re.DOTALL)
+        match = re.search(pattern, clean_text, re.I | re.DOTALL)
         if match:
             current_company = match.group(1).strip()
             break
 
+    # Fallback: check top 10 lines
+    if not current_company:
+        lines = text.split("\n")[:10]
+        for line in lines:
+            if "Pvt" in line or "Ltd" in line or "Technologies" in line or "Inc" in line or "Solutions" in line:
+                current_company = line.strip()
+                break
 
-    ctc_match = re.findall(r"CTC[:\- ]*₹?(\d+[.,]?\d*)", text, re.I)
-    if ctc_match:
-        ctc = ctc_match[0]
+    # CTC & ECTC
+    ctc_match = re.findall(r"CTC[:\- ]*₹?(\d+[.,]?\d*)", clean_text, re.I)
+    ectc_match = re.findall(r"(?:Expected|ECTC)[:\- ]*₹?(\d+[.,]?\d*)", clean_text, re.I)
+    ctc = ctc_match[0] if ctc_match else ""
+    ectc = ectc_match[0] if ectc_match else ""
 
-    ectc_match = re.findall(r"(?:Expected\s*CTC|ECTC)[:\- ]*₹?(\d+[.,]?\d*)", text, re.I)
-    if ectc_match:
-        ectc = ectc_match[0]
+    # Generate simple remarks
+    remarks = ""
+    exp = float(experience) if experience else 0
+    if jd_text:
+        jd_text_lower = jd_text.lower()
+        matched_keywords = 0
+        for keyword in ["python", "excel", "sql", "communication", "machine learning", "sales", "accounting", "data", "project"]:
+            if keyword in jd_text_lower and keyword in clean_text.lower():
+                matched_keywords += 1
+
+        if exp >= 3 and matched_keywords >= 3:
+            remarks = f"Candidate has {exp} years of experience and matches core skills. Likely a good fit."
+        elif exp >= 1 and matched_keywords >= 2:
+            remarks = f"Some relevant experience with partial skill match. May need further evaluation."
+        else:
+            remarks = f"Limited experience or low skill match. Possibly not suitable."
+    else:
+        remarks = "Job description not provided to evaluate suitability."
+
+    return {
+        "Name": name,
+        "Email": email,
+        "Mobile": phone,
+        "Experience": experience,
+        "Location": location,
+        "Current Company": current_company,
+        "CTC": ctc,
+        "ECTC": ectc,
+        "Remarks": remarks
+    }
+
 
     return {
         "Name": name,
