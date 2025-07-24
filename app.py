@@ -86,4 +86,3 @@ if jd_file and resume_files:
         file_name="ranked_candidates.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-s
