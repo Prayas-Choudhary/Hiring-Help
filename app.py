@@ -80,9 +80,23 @@ def extract_candidate_details(text):
     if location_match:
         location = location_match[0].strip().split("\n")[0]
 
-    company_match = re.findall(r"(?:Currently\s+at|Working\s+at|Employer[:\- ]*)(.*)", text, re.I)
-    if company_match:
-        current_company = company_match[0].strip().split("\n")[0]
+       # 🌟 Improved Current Company Extraction
+    current_company = ""
+    company_patterns = [
+        r"(?:currently\s+(?:working|employed)\s+(?:at|with)\s*)([A-Z][\w&.,\- ]+)",
+        r"(?:working\s+(?:at|with)\s*)([A-Z][\w&.,\- ]+)",
+        r"(?:presently\s+(?:associated|working)\s+(?:with|at)\s*)([A-Z][\w&.,\- ]+)",
+        r"(?:employer\s*[:\- ]*)([A-Z][\w&.,\- ]+)",
+        r"(?:experience\s*[:\- ]*)([A-Z][\w&.,\- ]+)",
+        r"(?:professional\s+experience.*?)\b([A-Z][\w&.,\- ]+)\b.*?(?:present|current|till date)",
+    ]
+
+    for pattern in company_patterns:
+        match = re.search(pattern, text, re.I | re.DOTALL)
+        if match:
+            current_company = match.group(1).strip()
+            break
+
 
     ctc_match = re.findall(r"CTC[:\- ]*₹?(\d+[.,]?\d*)", text, re.I)
     if ctc_match:
