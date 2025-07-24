@@ -1,6 +1,6 @@
 streamlit
-python-docx
-pdfplumber
 pandas
+python-docx
 openpyxl
+PyMuPDF
 scikit-learn
