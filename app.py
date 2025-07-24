@@ -1,97 +1,115 @@
-import os, re, base64
-import pandas as pd
-import fitz
+import os
+import re
 import streamlit as st
+import pandas as pd
+import fitz  # PyMuPDF
 from docx import Document
 from io import BytesIO
-from sentence_transformers import SentenceTransformer, util
-import matplotlib.pyplot as plt
 from fpdf import FPDF
+from sentence_transformers import SentenceTransformer, util
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
-st.set_page_config(page_title="AI Hiring Assistant", layout="wide")
-STATUS_OPTIONS = ["Pending", "Shortlisted", "Interviewed", "Rejected"]
 
-# Utility Functions
+def extract_text_from_pdf(file):
+    with fitz.open(stream=file.read(), filetype="pdf") as doc:
+        return "\n".join(page.get_text() for page in doc)
+
+def extract_text_from_docx(file):
+    doc = Document(file)
+    return "\n".join([para.text for para in doc.paragraphs])
+
+def extract_text_from_txt(file):
+    return file.read().decode("utf-8")
+
 def extract_text(file):
-    name = file.name.lower()
-    if name.endswith('.pdf'):
-        pdf = fitz.open(stream=file.read(), filetype="pdf")
-        return "\n".join([page.get_text() for page in pdf])
-    if name.endswith('.docx'):
-        return "\n".join(p.text for p in Document(file).paragraphs)
-    if name.endswith('.txt'):
-        return file.read().decode()
-    return ""
+    filename = file.name.lower()
+    if filename.endswith(".pdf"):
+        return extract_text_from_pdf(file)
+    elif filename.endswith(".docx"):
+        return extract_text_from_docx(file)
+    elif filename.endswith(".txt"):
+        return extract_text_from_txt(file)
+    else:
+        return ""
 
-def extract_contact(text):
-    email = re.findall(r'[\w\.-]+@[\w\.-]+', text)
-    phone = re.findall(r'(?<!\d)(\d{10})(?!\d)', text)
-    return (email[0] if email else "", phone[0] if phone else "")
+def compute_similarity(jd_text, resume_text):
+    jd_emb = model.encode(jd_text, convert_to_tensor=True)
+    resume_emb = model.encode(resume_text, convert_to_tensor=True)
+    score = util.cos_sim(jd_emb, resume_emb).item()
+    return round(score * 100, 2)
 
-def plot_skills_hist(df):
-    return None  # placeholder
+def extract_candidate_details(text):
+    name_match = re.findall(r"(?i)(name[:\- ]*)([A-Z][a-z]+\s[A-Z][a-z]+)", text)
+    email_match = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text)
+    phone_match = re.findall(r"(?:\+91[-\s]?|0)?[6-9]\d{9}", text)
 
-def to_pdf_report(df, company, jd_text):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(0,10,f"{company} - Candidate Summary", ln=True)
-    pdf.set_font("Arial", size=12)
-    for _, r in df.iterrows():
-        pdf.cell(0,8,f"{r['Name']} | {r['Similarity %']}% | {r['Status']}", ln=True)
-    return pdf.output(dest='S').encode('latin1')
+    name = name_match[0][1] if name_match else ""
+    email = email_match[0] if email_match else ""
+    phone = phone_match[0] if phone_match else ""
 
-def generate_email(name, jd_text):
-    clean = "\n".join([l for l in jd_text.splitlines() if 'client' not in l.lower()])
-    return f"Hi {name},\n\nWe found your background a strong match:\n\n{clean}\n\nRegards,\nTeam"
+    experience = ""
+    exp_match = re.findall(r"(\d+\.?\d*)\s+(?:years?|yrs?)\s+of\s+experience", text, re.I)
+    if exp_match:
+        experience = exp_match[0]
 
-# UI
-st.title("🧠 Smart AI Hiring Assistant")
-company = st.text_input("🏢 Company Name")
-jd_files = st.file_uploader("📄 Upload JD(s)", type=['pdf','docx','txt'], accept_multiple_files=True)
-resume_files = st.file_uploader("📁 Upload Resume(s)", type=['pdf','docx'], accept_multiple_files=True)
+    location_match = re.findall(r"Location[:\- ]*(.*)", text, re.I)
+    location = location_match[0].strip() if location_match else ""
 
-if jd_files and resume_files and company:
-    jds = {f.name: extract_text(f) for f in jd_files}
-    jd_choice = st.selectbox("Select Active JD", list(jds.keys()))
-    jd_text = jds[jd_choice]
-    st.text_area("JD Preview", jd_text, height=200)
+    company_match = re.findall(r"(?:Currently\s+at|Working\s+at)[:\- ]*(.*)", text, re.I)
+    current_company = company_match[0].strip() if company_match else ""
 
-    jd_embed = model.encode(jd_text, convert_to_tensor=True)
-    seen = set(); rows=[]
-    for f in resume_files:
-        text = extract_text(f)
-        email, phone = extract_contact(text)
-        key = (os.path.splitext(f.name)[0], email)
-        if key in seen: continue
-        seen.add(key)
-        name = os.path.splitext(f.name)[0]
-        skills = ["python","java","sql","aws","excel"]  # sample
-        resume_skills = [k for k in skills if k in text.lower()]
-        missing = [k for k in skills if k not in resume_skills]
-        emb = model.encode(text, convert_to_tensor=True)
-        sim = util.cos_sim(emb, jd_embed).item()*100
-        rows.append({
-            "Name": name, "Email": email, "Phone": phone,
-            "Match %": round(sim,2),
-            "Skills": ", ".join(resume_skills),
-            "Missing": ", ".join(missing),
-            "Resume": text[:300]+"...",
-            "Status": "Pending",
-            "EmailDraft": generate_email(name, jd_text)
-        })
+    ctc_match = re.findall(r"CTC[:\- ]*₹?(\d+[.,]?\d*)", text, re.I)
+    ctc = ctc_match[0] if ctc_match else ""
 
-    df = pd.DataFrame(rows).sort_values("Match %", ascending=False).reset_index(drop=True)
-    st.dataframe(df)
+    ectc_match = re.findall(r"(?:Expected|ECTC)[:\- ]*₹?(\d+[.,]?\d*)", text, re.I)
+    ectc = ectc_match[0] if ectc_match else ""
 
-    for i in range(len(df)):
-        df.at[i,"Status"] = st.selectbox(f"Status for {df.at[i,'Name']}", STATUS_OPTIONS, key=i)
-        st.text_area(f"📧 Email Draft - {df.at[i,'Name']}", df.at[i,"EmailDraft"], height=100, key=f"ed{i}")
-        st.write("---")
+    return {
+        "Name": name,
+        "Email": email,
+        "Mobile": phone,
+        "Experience": experience,
+        "Location": location,
+        "Current Company": current_company,
+        "CTC": ctc,
+        "ECTC": ectc
+    }
 
-    buf = BytesIO(); df.to_excel(buf, index=False, engine='openpyxl'); buf.seek(0)
-    st.download_button("⬇ Download Excel", data=buf, file_name=f"{company}_candidates.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+def main():
+    st.set_page_config(layout="wide")
+    st.title("📄 Smart AI Hiring Assistant")
 
-    pdfdata = to_pdf_report(df, company, jd_text)
-    st.download_button("📄 Download PDF Report", data=pdfdata, file_name="report.pdf", mime="application/pdf")
+    st.markdown("### Step 1: Enter Company Name")
+    company_name = st.text_input("Company you're hiring for", placeholder="E.g., TCS, Accenture, etc.")
+
+    st.markdown("### Step 2: Upload Job Description (JD)")
+    jd_file = st.file_uploader("Upload JD File", type=["pdf", "docx", "txt"])
+
+    st.markdown("### Step 3: Upload Candidate Resumes")
+    resumes = st.file_uploader("Upload One or More Resumes", type=["pdf", "docx", "txt"], accept_multiple_files=True)
+
+    if jd_file and resumes:
+        jd_text = extract_text(jd_file)
+        data = []
+
+        for resume_file in resumes:
+            resume_text = extract_text(resume_file)
+            similarity = compute_similarity(jd_text, resume_text)
+            details = extract_candidate_details(resume_text)
+            details["Similarity %"] = similarity
+            data.append(details)
+
+        df = pd.DataFrame(data)
+        df = df.sort_values(by="Similarity %", ascending=False)
+
+        st.markdown("### 📊 Candidate Ranking")
+        st.dataframe(df, use_container_width=True)
+
+        excel_buffer = BytesIO()
+        df.to_excel(excel_buffer, index=False)
+        excel_buffer.seek(0)
+
+        st.download_button("⬇ Download Excel", data=excel_buffer, file_name="ranked_candidates.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+if __name__ == "__main__":
+    main()
