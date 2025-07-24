@@ -8,7 +8,7 @@ from io import BytesIO
 from sentence_transformers import SentenceTransformer, util
 
 # ✅ Force model to load on CPU to avoid Streamlit cloud errors
-model = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def extract_text_from_pdf(file):
     with fitz.open(stream=file.read(), filetype="pdf") as doc:
