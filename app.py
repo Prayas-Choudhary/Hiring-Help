@@ -10,6 +10,8 @@ from sentence_transformers import SentenceTransformer, util
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
+# ========== File Extractors ==========
+
 def extract_text_from_pdf(file):
     with fitz.open(stream=file.read(), filetype="pdf") as doc:
         return "\n".join(page.get_text() for page in doc)
@@ -19,7 +21,7 @@ def extract_text_from_docx(file):
     return "\n".join([para.text for para in doc.paragraphs])
 
 def extract_text_from_txt(file):
-    return file.read().decode("utf-8")
+    return file.read().decode("utf-8", errors="ignore")
 
 def extract_text(file):
     filename = file.name.lower()
@@ -32,48 +34,94 @@ def extract_text(file):
     else:
         return ""
 
+# ========== Similarity Scoring ==========
+
 def compute_similarity(jd_text, resume_text):
     jd_emb = model.encode(jd_text, convert_to_tensor=True)
     resume_emb = model.encode(resume_text, convert_to_tensor=True)
     score = util.cos_sim(jd_emb, resume_emb).item()
     return round(score * 100, 2)
 
-def extract_candidate_details(text):
-    name_match = re.findall(r"(?i)(name[:\- ]*)([A-Z][a-z]+\s[A-Z][a-z]+)", text)
-    email_match = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text)
-    phone_match = re.findall(r"(?:\+91[-\s]?|0)?[6-9]\d{9}", text)
+# ========== Candidate Detail Extractor ==========
 
-    name = name_match[0][1] if name_match else ""
-    email = email_match[0] if email_match else ""
-    phone = phone_match[0] if phone_match else ""
+def extract_candidate_name(text):
+    # Clean and limit to top part of resume
+    top_text = text[:1000].replace('\n', ' ').replace('\r', '').strip()
 
+    # 1. Direct label match: Name: John Doe
+    name_match = re.search(r"\bName\s*[:\-]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", top_text)
+    if name_match:
+        return name_match.group(1)
+
+    # 2. Try to find first few capitalized words near top that don't match keywords
+    lines = text.strip().split('\n')[:20]  # Only top part of resume
+    lines = [line.strip() for line in lines if line.strip()]
+    skip_keywords = ['Resume', 'Curriculum Vitae', 'CV', 'Profile', 'Email', 'Phone', 'Contact', 'Mobile']
+    potential_names = []
+
+    for line in lines:
+        if any(word.lower() in line.lower() for word in skip_keywords):
+            continue
+        # Match 2-3 capitalized words (common for names)
+        match = re.match(r"^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})$", line.strip())
+        if match:
+            potential_names.append(match.group(1))
+
+    if potential_names:
+        return potential_names[0]
+
+    # 3. Backup fallback: match first multi-capitalized word sequence in top text
+    match = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", top_text)
+    if match:
+        return match.group(1)
+
+    return ""
+
+
+    # Email and phone
+    email = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clean_text)
+    phone = re.search(r"(?:\+91[-\s]?|0)?[6-9]\d{9}", clean_text)
+
+    # Experience
     experience = ""
-    exp_match = re.findall(r"(\d+\.?\d*)\s+(?:years?|yrs?)\s+of\s+experience", text, re.I)
+    exp_match = re.search(r"(?:\bExp(?:erience)?\b\s*[:\-]?\s*)(\d+\.?\d*)\s*(?:years|yrs)?", clean_text, re.I)
+    if not exp_match:
+        exp_match = re.search(r"(\d+\.?\d*)\s*(?:years|yrs)\s+of\s+experience", clean_text, re.I)
     if exp_match:
-        experience = exp_match[0]
+        experience = exp_match.group(1)
 
-    location_match = re.findall(r"Location[:\- ]*(.*)", text, re.I)
-    location = location_match[0].strip() if location_match else ""
+    # Location
+    location_match = re.search(r"\bLocation\s*[:\-]?\s*([A-Za-z ,]+)", clean_text, re.I)
+    location = location_match.group(1).strip() if location_match else ""
 
-    company_match = re.findall(r"(?:Currently\s+at|Working\s+at)[:\- ]*(.*)", text, re.I)
-    current_company = company_match[0].strip() if company_match else ""
+    # Current company
+    company = ""
+    company_match = re.search(r"(?:Currently working at|Current Company|Company Name)\s*[:\-]?\s*(.+?)(?:\n|\.|,|$)", text, re.I)
+    if company_match:
+        company = company_match.group(1).strip()
 
-    ctc_match = re.findall(r"CTC[:\- ]*₹?(\d+[.,]?\d*)", text, re.I)
-    ctc = ctc_match[0] if ctc_match else ""
-
-    ectc_match = re.findall(r"(?:Expected|ECTC)[:\- ]*₹?(\d+[.,]?\d*)", text, re.I)
-    ectc = ectc_match[0] if ectc_match else ""
+    # CTC and ECTC
+    ctc = ""
+    ectc = ""
+    ctc_match = re.search(r"\bCTC\s*[:\-]?\s*₹?(\d+[.,]?\d*)", clean_text, re.I)
+    ectc_match = re.search(r"\b(?:Expected|ECTC)\s*[:\-]?\s*₹?(\d+[.,]?\d*)", clean_text, re.I)
+    if ctc_match:
+        ctc = ctc_match.group(1)
+    if ectc_match:
+        ectc = ectc_match.group(1)
 
     return {
         "Name": name,
-        "Email": email,
-        "Mobile": phone,
+        "Email": email.group(0) if email else "",
+        "Mobile": phone.group(0) if phone else "",
         "Experience": experience,
         "Location": location,
-        "Current Company": current_company,
+        "Current Company": company,
         "CTC": ctc,
         "ECTC": ectc
     }
+
+# ========== Streamlit App ==========
 
 def main():
     st.set_page_config(layout="wide")
@@ -102,14 +150,20 @@ def main():
         df = pd.DataFrame(data)
         df = df.sort_values(by="Similarity %", ascending=False)
 
-        st.markdown("### 📊 Candidate Ranking")
+        st.markdown("### 📊 Ranked Candidates")
         st.dataframe(df, use_container_width=True)
 
+        # Excel Export
         excel_buffer = BytesIO()
         df.to_excel(excel_buffer, index=False)
         excel_buffer.seek(0)
 
-        st.download_button("⬇ Download Excel", data=excel_buffer, file_name="ranked_candidates.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button(
+            "⬇ Download Excel Report",
+            data=excel_buffer,
+            file_name="ranked_candidates.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 if __name__ == "__main__":
     main()
