@@ -13,7 +13,7 @@ from functools import lru_cache
 
 @lru_cache(maxsize=1)
 def load_model():
-    return SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+    return SentenceTransformer('all-MiniLM-L6-v2')
 
 def extract_text_from_pdf(file):
     with fitz.open(stream=file.read(), filetype="pdf") as doc:
