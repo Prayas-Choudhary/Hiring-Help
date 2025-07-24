@@ -5,9 +5,9 @@ import pandas as pd
 import fitz  # PyMuPDF
 from docx import Document
 from io import BytesIO
+from fpdf import FPDF
 from sentence_transformers import SentenceTransformer, util
 
-# ✅ Force model to load on CPU to avoid Streamlit cloud errors
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def extract_text_from_pdf(file):
@@ -38,8 +38,18 @@ def compute_similarity(jd_text, resume_text):
     score = util.cos_sim(jd_emb, resume_emb).item()
     return round(score * 100, 2)
 
-def extract_candidate_details(text, jd_text=""):
-    clean_text = text.strip().replace('\n', ' ')
+def generate_remark(similarity, experience, skills_matched):
+    if similarity >= 75:
+        return "Highly suitable – strong JD match."
+    elif similarity >= 50:
+        return "Moderately suitable – partial match."
+    else:
+        return "Less suitable – consider alternate role."
+
+def extract_candidate_details(text):
+    clean_text = text.replace("\n", " ").replace("\r", " ")
+
+    # Extract name (improved)
     name = ""
     name_match = re.search(r"Name\s*[:\-]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", clean_text)
     if name_match:
@@ -49,88 +59,51 @@ def extract_candidate_details(text, jd_text=""):
         if name_match:
             name = name_match[0]
 
-    email_match = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clean_text)
-    phone_match = re.findall(r"(?:\+91[-\s]?|0)?[6-9]\d{9}", clean_text)
-
-    email = email_match[0] if email_match else ""
-    phone = phone_match[0] if phone_match else ""
+    # Email & phone
+    email = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clean_text)
+    phone = re.search(r"(?:\+91[-\s]?|0)?[6-9]\d{9}", clean_text)
 
     # Experience
     experience = ""
-    exp_match = re.findall(r"(\d+\.?\d*)\s+(?:years?|yrs?)\s+of\s+experience", clean_text, re.I)
+    exp_match = re.search(r"(\d+(?:\.\d+)?)\s+(?:years?|yrs?)\s+of\s+experience", clean_text, re.I)
     if exp_match:
-        experience = exp_match[0]
+        experience = exp_match.group(1)
 
     # Location
-    location_match = re.findall(r"Location[:\- ]*(.*)", clean_text, re.I)
-    location = location_match[0].strip() if location_match else ""
+    location = ""
+    loc_match = re.search(r"Location[:\-]?\s*(\w+[\w\s,]*)", clean_text, re.I)
+    if loc_match:
+        location = loc_match.group(1).strip()
 
-    # Improved Current Company Extraction
+    # Current Company
     current_company = ""
     company_patterns = [
-        r"(?:currently\s+(?:working|employed)\s+(?:at|with)\s*)([A-Z][\w&.,\- ]+)",
-        r"(?:working\s+(?:at|with)\s*)([A-Z][\w&.,\- ]+)",
-        r"(?:presently\s+(?:associated|working)\s+(?:with|at)\s*)([A-Z][\w&.,\- ]+)",
-        r"(?:employer\s*[:\- ]*)([A-Z][\w&.,\- ]+)",
-        r"(?:experience\s*[:\- ]*)([A-Z][\w&.,\- ]+)",
-        r"(?:professional\s+experience.*?)\b([A-Z][\w&.,\- ]+)\b.*?(?:present|current|till date)",
+        r"Currently\s+(?:working|employed)\s+at\s*[:\-]?\s*([A-Za-z0-9 &,.]+)",
+        r"Working\s+at\s*[:\-]?\s*([A-Za-z0-9 &,.]+)",
+        r"Presently\s+working\s+at\s*[:\-]?\s*([A-Za-z0-9 &,.]+)",
+        r"Company\s*[:\-]?\s*([A-Za-z0-9 &,.]+)"
     ]
     for pattern in company_patterns:
-        match = re.search(pattern, clean_text, re.I | re.DOTALL)
+        match = re.search(pattern, clean_text, re.I)
         if match:
             current_company = match.group(1).strip()
             break
 
-    # Fallback: check top 10 lines
-    if not current_company:
-        lines = text.split("\n")[:10]
-        for line in lines:
-            if "Pvt" in line or "Ltd" in line or "Technologies" in line or "Inc" in line or "Solutions" in line:
-                current_company = line.strip()
-                break
+    # CTC and ECTC
+    ctc = ""
+    ctc_match = re.search(r"CTC\s*[:\-]?\s*₹?([\d.,]+)", clean_text, re.I)
+    if ctc_match:
+        ctc = ctc_match.group(1)
 
-    # CTC & ECTC
-    ctc_match = re.findall(r"CTC[:\- ]*₹?(\d+[.,]?\d*)", clean_text, re.I)
-    ectc_match = re.findall(r"(?:Expected|ECTC)[:\- ]*₹?(\d+[.,]?\d*)", clean_text, re.I)
-    ctc = ctc_match[0] if ctc_match else ""
-    ectc = ectc_match[0] if ectc_match else ""
-
-    # Generate simple remarks
-    remarks = ""
-    exp = float(experience) if experience else 0
-    if jd_text:
-        jd_text_lower = jd_text.lower()
-        matched_keywords = 0
-        for keyword in ["python", "excel", "sql", "communication", "machine learning", "sales", "accounting", "data", "project"]:
-            if keyword in jd_text_lower and keyword in clean_text.lower():
-                matched_keywords += 1
-
-        if exp >= 3 and matched_keywords >= 3:
-            remarks = f"Candidate has {exp} years of experience and matches core skills. Likely a good fit."
-        elif exp >= 1 and matched_keywords >= 2:
-            remarks = f"Some relevant experience with partial skill match. May need further evaluation."
-        else:
-            remarks = f"Limited experience or low skill match. Possibly not suitable."
-    else:
-        remarks = "Job description not provided to evaluate suitability."
+    ectc = ""
+    ectc_match = re.search(r"(?:Expected|ECTC)\s*[:\-]?\s*₹?([\d.,]+)", clean_text, re.I)
+    if ectc_match:
+        ectc = ectc_match.group(1)
 
     return {
         "Name": name,
-        "Email": email,
-        "Mobile": phone,
-        "Experience": experience,
-        "Location": location,
-        "Current Company": current_company,
-        "CTC": ctc,
-        "ECTC": ectc,
-        "Remarks": remarks
-    }
-
-
-    return {
-        "Name": name,
-        "Email": email,
-        "Mobile": phone,
+        "Email": email.group() if email else "",
+        "Mobile": phone.group() if phone else "",
         "Experience": experience,
         "Location": location,
         "Current Company": current_company,
@@ -156,42 +129,34 @@ def main():
         data = []
 
         for resume_file in resumes:
-            try:
-                resume_text = extract_text(resume_file)
-                similarity = compute_similarity(jd_text, resume_text)
-                details = extract_candidate_details(resume_text)
-                details["Similarity %"] = similarity
-                data.append(details)
-            except Exception as e:
-                st.warning(f"❌ Could not process {resume_file.name}: {e}")
+            resume_text = extract_text(resume_file)
+            similarity = compute_similarity(jd_text, resume_text)
+            details = extract_candidate_details(resume_text)
+            details = {
+                "Name": details["Name"],
+                "Similarity %": similarity,
+                "Email": details["Email"],
+                "Mobile": details["Mobile"],
+                "Experience": details["Experience"],
+                "Location": details["Location"],
+                "Current Company": details["Current Company"],
+                "CTC": details["CTC"],
+                "ECTC": details["ECTC"],
+                "Remarks": generate_remark(similarity, details["Experience"], jd_text)
+            }
+            data.append(details)
 
-        if data:
-          df = pd.DataFrame(data)
-df = df.sort_values(by="Similarity %", ascending=False)
+        df = pd.DataFrame(data)
+        df = df.sort_values(by="Similarity %", ascending=False)
 
-# Reorder columns: Similarity % right after Name
-desired_order = ['Name', 'Similarity %', 'Email', 'Mobile', 'Experience', 'Location', 'Current Company', 'CTC', 'ECTC', 'Remarks']
-existing_cols = [col for col in desired_order if col in df.columns]
-remaining_cols = [col for col in df.columns if col not in existing_cols]
-df = df[existing_cols + remaining_cols]
-
-        # After sorting and reordering the DataFrame
         st.markdown("### 📊 Candidate Ranking")
         st.dataframe(df, use_container_width=True)
 
-        # Download Excel
         excel_buffer = BytesIO()
         df.to_excel(excel_buffer, index=False)
         excel_buffer.seek(0)
 
-        st.download_button(
-            "⬇ Download Excel",
-            data=excel_buffer,
-            file_name="ranked_candidates.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-            )
+        st.download_button("⬇ Download Excel", data=excel_buffer, file_name="ranked_candidates.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 if __name__ == "__main__":
     main()
