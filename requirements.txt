@@ -1,4 +1,4 @@
-streamlit
+mastreamlit
 pandas
 python-docx
 openpyxl
@@ -7,3 +7,4 @@ scikit-learn
 sentence-transformers
 torch
 fpdf
+matpilotlib
