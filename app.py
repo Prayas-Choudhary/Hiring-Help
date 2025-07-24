@@ -7,7 +7,7 @@ from docx import Document
 from io import BytesIO
 from fpdf import FPDF
 from sentence_transformers import SentenceTransformer, util
-pip install --upgrade pip
+
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def extract_text_from_pdf(file):
