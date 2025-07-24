@@ -8,7 +8,12 @@ from io import BytesIO
 from fpdf import FPDF
 from sentence_transformers import SentenceTransformer, util
 
-model = SentenceTransformer('all-MiniLM-L6-v2')
+import torch
+from functools import lru_cache
+
+@lru_cache(maxsize=1)
+def load_model():
+    return SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
 
 def extract_text_from_pdf(file):
     with fitz.open(stream=file.read(), filetype="pdf") as doc:
@@ -33,8 +38,8 @@ def extract_text(file):
         return ""
 
 def compute_similarity(jd_text, resume_text):
-    jd_emb = model.encode(jd_text, convert_to_tensor=True)
-    resume_emb = model.encode(resume_text, convert_to_tensor=True)
+    jd_emb = load_model().encode(jd_text, convert_to_tensor=True)
+    resume_emb = load_model().encode(resume_text, convert_to_tensor=True)
     score = util.cos_sim(jd_emb, resume_emb).item()
     return round(score * 100, 2)
 
