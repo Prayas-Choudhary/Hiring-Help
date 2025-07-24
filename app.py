@@ -20,12 +20,16 @@ os.makedirs(JD_FOLDER, exist_ok=True)
 os.makedirs(EMAIL_OUTPUT_PATH, exist_ok=True)
 os.makedirs(os.path.dirname(TRACKER_PATH), exist_ok=True)
 
-def extract_text_from_pdf(file_path):
+def extract_text_from_pdf(file):
     text = ''
-    doc = fitz.open(file_path)
+    if isinstance(file, str):  # path string
+        doc = fitz.open(file)
+    else:  # in-memory file (like UploadedFile)
+        doc = fitz.open(stream=file.read(), filetype="pdf")
     for page in doc:
         text += page.get_text() + '\n'
     return text
+
 
 def extract_text_from_docx(file_path):
     doc = Document(file_path)
@@ -100,7 +104,9 @@ def update_excel_tracker(df):
 
 def load_text(file):
     if file.name.endswith('.pdf'):
+        file.seek(0)  # important to reset pointer
         return extract_text_from_pdf(file)
+
     elif file.name.endswith('.docx'):
         return extract_text_from_docx(file)
     elif file.name.endswith('.txt'):
