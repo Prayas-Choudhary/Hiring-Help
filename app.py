@@ -1,37 +1,22 @@
-# hiring_automation_app.py
-
 import os
 import re
 import pandas as pd
-from openpyxl import Workbook
 from docx import Document
 from io import BytesIO
 import streamlit as st
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-CANDIDATE_FOLDER = 'resumes'
-OUTPUT_FOLDER = 'output'
-TRACKER_PATH = os.path.join(OUTPUT_FOLDER, 'excel', 'candidate_tracker.xlsx')
-EMAIL_OUTPUT_PATH = os.path.join(OUTPUT_FOLDER, 'emails')
-
-os.makedirs(CANDIDATE_FOLDER, exist_ok=True)
-os.makedirs(EMAIL_OUTPUT_PATH, exist_ok=True)
-os.makedirs(os.path.join(OUTPUT_FOLDER, 'excel'), exist_ok=True)
-
-# --------- Resume Parsing -----------
-def extract_text_from_pdf(file_path):
-    try:
-        import fitz  # PyMuPDF as an alternative to pdfplumber
-    except ImportError:
-        raise ImportError("Please install PyMuPDF using 'pip install pymupdf'")
-
+def extract_text_from_pdf(file):
+    import fitz  # PyMuPDF
     text = ''
-    doc = fitz.open(file_path)
-    for page in doc:
-        text += page.get_text() + '\n'
+    with fitz.open(stream=file.read(), filetype='pdf') as doc:
+        for page in doc:
+            text += page.get_text()
     return text
 
-def extract_text_from_docx(file_path):
-    doc = Document(file_path)
+def extract_text_from_docx(file):
+    doc = Document(file)
     return '\n'.join([p.text for p in doc.paragraphs])
 
 def extract_contact_info(text):
@@ -39,79 +24,66 @@ def extract_contact_info(text):
     phone = re.findall(r'\+?\d[\d\s()-]{8,}\d', text)
     return email[0] if email else '', phone[0] if phone else ''
 
-def parse_resume(file_path):
-    if file_path.endswith('.pdf'):
-        text = extract_text_from_pdf(file_path)
-    elif file_path.endswith('.docx'):
-        text = extract_text_from_docx(file_path)
-    else:
-        return None
+def extract_text(file):
+    if file.name.endswith('.pdf'):
+        return extract_text_from_pdf(file)
+    elif file.name.endswith('.docx'):
+        return extract_text_from_docx(file)
+    elif file.name.endswith('.txt'):
+        return file.read().decode('utf-8')
+    return ''
+
+def compute_similarity(jd_text, resume_text):
+    texts = [jd_text, resume_text]
+    tfidf = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = tfidf.fit_transform(texts)
+    sim_score = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+    return round(sim_score * 100, 2)
+
+def parse_resume(file, jd_text):
+    text = extract_text(file)
     email, phone = extract_contact_info(text)
+    similarity = compute_similarity(jd_text, text)
     return {
-        'Name': os.path.splitext(os.path.basename(file_path))[0],
+        'Name': file.name.replace(".pdf", "").replace(".docx", "").replace(".txt", ""),
         'Email': email,
         'Phone': phone,
-        'Summary': text[:300] + '...'
+        'Similarity %': similarity,
+        'Summary': text[:300] + "..."
     }
 
-# --------- Tracker Excel File -----------
-def update_excel_tracker(candidate_data_list):
-    df = pd.DataFrame(candidate_data_list)
-    df.to_excel(TRACKER_PATH, index=False)
-    print(f"Excel tracker saved to: {TRACKER_PATH}")
+# Streamlit App
+st.title("📄 Automated Hiring Assistant")
 
-# --------- JD Editor and Email Generator -----------
-def edit_jd(jd_text):
-    lines = jd_text.split('\n')
-    clean_lines = [line for line in lines if 'client' not in line.lower() and 'company' not in line.lower()]
-    return '\n'.join(clean_lines)
+tab1, tab2, tab3 = st.tabs(["1️⃣ Company Info", "2️⃣ Upload JD", "3️⃣ Upload Resumes"])
 
-def create_email_draft(candidate_name, jd_text):
-    email_template = f"""
-Hi {candidate_name},
+with tab1:
+    company_name = st.text_input("Enter Company Name You Are Hiring For")
 
-We found your profile suitable for the following position:
+with tab2:
+    jd_file = st.file_uploader("Upload JD File (PDF, DOCX, TXT)", type=['pdf', 'docx', 'txt'])
 
-{jd_text}
+with tab3:
+    resume_files = st.file_uploader("Upload One or More Resumes", type=['pdf', 'docx', 'txt'], accept_multiple_files=True)
 
-Please let us know if you're interested.
+if jd_file and resume_files:
+    jd_text = extract_text(jd_file)
+    results = [parse_resume(file, jd_text) for file in resume_files]
+    results.sort(key=lambda x: x['Similarity %'], reverse=True)
 
-Regards,
-Hiring Team
-"""
-    with open(os.path.join(EMAIL_OUTPUT_PATH, f"{candidate_name}_email.txt"), 'w') as f:
-        f.write(email_template)
-    print(f"Email draft saved for {candidate_name}.")
+    df = pd.DataFrame(results)
 
-# --------- Main Execution -----------
-def main():
-    candidate_data_list = []
-    for filename in os.listdir(CANDIDATE_FOLDER):
-        path = os.path.join(CANDIDATE_FOLDER, filename)
-        candidate = parse_resume(path)
-        if candidate:
-            candidate_data_list.append(candidate)
-            jd_text = edit_jd("JD: We are hiring for our client, ABC Corp. Responsibilities include...")
-            create_email_draft(candidate['Name'], jd_text)
+    st.subheader("📊 Resume Match Results")
+    st.dataframe(df)
 
-    update_excel_tracker(candidate_data_list)
+    buffer = BytesIO()
+    df.to_excel(buffer, index=False, engine='openpyxl')
+    buffer.seek(0)
 
-    # Streamlit app preview and download
-    st.title("Candidate Tracker Preview")
-    if candidate_data_list:
-        df = pd.DataFrame(candidate_data_list)
-        st.dataframe(df)
-
-        buffer = BytesIO()
-        df.to_excel(buffer, index=False, engine='openpyxl')
-        buffer.seek(0)
-
-        st.download_button(
-            label="⬇ Download Excel",
-            data=buffer,
-            file_name="ranked_candidates.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-if __name__ == '__main__':
-    main()
+    st.download_button(
+        label="⬇ Download Ranked Candidates Excel",
+        data=buffer,
+        file_name="ranked_candidates.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+s
