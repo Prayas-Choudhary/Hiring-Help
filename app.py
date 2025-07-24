@@ -5,6 +5,7 @@ import streamlit as st
 from docx import Document
 from io import BytesIO
 from sentence_transformers import SentenceTransformer, util
+import matplotlib.pyplot as plt
 from fpdf import FPDF
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
