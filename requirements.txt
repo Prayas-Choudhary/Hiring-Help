@@ -10,3 +10,4 @@ fpdf
 pdfplumber
 docx2txt
 spacy
+matplotlib
