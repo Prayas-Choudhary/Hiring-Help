@@ -166,8 +166,15 @@ def main():
                 st.warning(f"❌ Could not process {resume_file.name}: {e}")
 
         if data:
-            df = pd.DataFrame(data)
-            df = df.sort_values(by="Similarity %", ascending=False)
+          df = pd.DataFrame(data)
+df = df.sort_values(by="Similarity %", ascending=False)
+
+# Reorder columns: Similarity % right after Name
+desired_order = ['Name', 'Similarity %', 'Email', 'Mobile', 'Experience', 'Location', 'Current Company', 'CTC', 'ECTC', 'Remarks']
+existing_cols = [col for col in desired_order if col in df.columns]
+remaining_cols = [col for col in df.columns if col not in existing_cols]
+df = df[existing_cols + remaining_cols]
+
 
             st.markdown("### 📊 Candidate Ranking")
             st.dataframe(df, use_container_width=True)
