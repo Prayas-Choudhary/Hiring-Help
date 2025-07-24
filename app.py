@@ -175,19 +175,22 @@ existing_cols = [col for col in desired_order if col in df.columns]
 remaining_cols = [col for col in df.columns if col not in existing_cols]
 df = df[existing_cols + remaining_cols]
 
+        # After sorting and reordering the DataFrame
+        st.markdown("### 📊 Candidate Ranking")
+        st.dataframe(df, use_container_width=True)
 
-            st.markdown("### 📊 Candidate Ranking")
-            st.dataframe(df, use_container_width=True)
+        # Download Excel
+        excel_buffer = BytesIO()
+        df.to_excel(excel_buffer, index=False)
+        excel_buffer.seek(0)
 
-            excel_buffer = BytesIO()
-            df.to_excel(excel_buffer, index=False)
-            excel_buffer.seek(0)
+        st.download_button(
+            "⬇ Download Excel",
+            data=excel_buffer,
+            file_name="ranked_candidates.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-            st.download_button(
-                "⬇ Download Excel",
-                data=excel_buffer,
-                file_name="ranked_candidates.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
 if __name__ == "__main__":
