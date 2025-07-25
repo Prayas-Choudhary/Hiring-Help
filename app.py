@@ -12,10 +12,10 @@ import openai
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 st.set_page_config(page_title="Smart AI Hiring Assistant", layout="wide")
-
 st.title("🤖 Smart AI Hiring Assistant")
 
 company_name = st.text_input("🏢 Enter the Company Name for which you're hiring:")
+jd_title = st.text_input("📌 Job Title / Role")
 
 st.markdown("### 📄 Upload Job Description (JD)")
 jd_file = st.file_uploader("Upload Job Description", type=["pdf", "docx", "txt"], key="jd")
@@ -37,9 +37,6 @@ def extract_text(file):
         text = str(file.read(), "utf-8")
     return text.strip()
 
-def similar(a, b):
-    return round(SequenceMatcher(None, a, b).ratio() * 100, 2)
-
 def extract_name(text, filename=""):
     name = ""
     clean_text = re.sub(r"\s+", " ", text)
@@ -51,7 +48,6 @@ def extract_name(text, filename=""):
         if found_names:
             name = found_names[0]
         else:
-            # Try extracting from filename
             base = Path(filename).stem
             parts = base.replace("Naukri_", "").split("_")
             for p in parts:
@@ -84,6 +80,38 @@ def extract_ectc(text):
     match = re.search(r"(Expected CTC|ECTC)\s*[:\-]?\s*₹?\s*([\d.,]+[ ]?(LPA|lacs|Lakhs)?)", text)
     return match.group(2).strip() if match else ""
 
+def get_ai_analysis(jd, resume):
+    prompt = f"""You are an AI recruitment assistant. Given the following JD and Resume, analyze and provide:
+- Similarity percentage (out of 100)
+- Matching Skills
+- Missing Skills
+- Final Suitability Remarks (1 sentence)
+
+Job Description:
+{jd}
+
+Resume:
+{resume}
+
+Reply in JSON with keys: similarity, matching_skills, missing_skills, remarks.
+"""
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2
+        )
+        import json
+        content = response.choices[0].message.content.strip()
+        return json.loads(content)
+    except Exception as e:
+        return {
+            "similarity": 0,
+            "matching_skills": "N/A",
+            "missing_skills": "N/A",
+            "remarks": f"Error: {e}"
+        }
+
 def convert_df_to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -91,7 +119,7 @@ def convert_df_to_excel(df):
         workbook = writer.book
         worksheet = writer.sheets["Candidates"]
         for i, col in enumerate(df.columns):
-            worksheet.set_column(i, i, 20)
+            worksheet.set_column(i, i, 25)
     output.seek(0)
     return output
 
@@ -99,22 +127,26 @@ def convert_df_to_excel(df):
 
 if jd_file and resume_files:
     jd_text = extract_text(jd_file)
-
     results = []
+
     for file in resume_files:
         resume_text = extract_text(file)
-        similarity = similar(jd_text, resume_text)
         name = extract_name(resume_text, file.name)
         email = extract_email(resume_text)
         phone = extract_phone(resume_text)
         location = extract_location(resume_text)
         ctc = extract_ctc(resume_text)
         ectc = extract_ectc(resume_text)
+        
+        ai_result = get_ai_analysis(jd_text, resume_text)
 
         results.append({
             "Sr. No.": len(results)+1,
             "Name": name,
-            "Similarity (%)": similarity,
+            "Similarity (%)": ai_result.get("similarity", 0),
+            "Matching Skills": ai_result.get("matching_skills", ""),
+            "Missing Skills": ai_result.get("missing_skills", ""),
+            "Remarks": ai_result.get("remarks", ""),
             "Email": email,
             "Mobile": phone,
             "Location": location,
@@ -129,5 +161,11 @@ if jd_file and resume_files:
     st.markdown("### 📊 Candidate Ranking")
     st.dataframe(df, use_container_width=True)
 
+    file_suffix = f"({jd_title})_{company_name}".replace(" ", "_")
     excel_data = convert_df_to_excel(df)
-    st.download_button("📥 Download Candidate Sheet", data=excel_data, file_name="Smart_AI_Hiring_Candidates_.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button(
+        "📥 Download Candidate Sheet",
+        data=excel_data,
+        file_name=f"Smart_AI_Hiring_Candidates_{file_suffix}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
