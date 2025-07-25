@@ -4,21 +4,23 @@ import docx2txt
 import pdfplumber
 import pandas as pd
 import re
-from difflib import SequenceMatcher
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from io import BytesIO
 from pathlib import Path
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+
+nltk.download('punkt')
+nltk.download('stopwords')
 
 st.set_page_config(page_title="Smart AI Hiring Assistant", layout="wide")
-
 st.title("🤖 Smart AI Hiring Assistant")
 
 company_name = st.text_input("🏢 Enter the Company Name for which you're hiring:")
-
-st.markdown("### 📄 Upload Job Description (JD)")
-jd_file = st.file_uploader("Upload Job Description", type=["pdf", "docx", "txt"], key="jd")
-
-st.markdown("### 📂 Upload Resume(s)")
-resume_files = st.file_uploader("Upload Resume(s)", accept_multiple_files=True, type=["pdf", "docx", "txt"], key="resumes")
+jd_file = st.file_uploader("📄 Upload Job Description", type=["pdf", "docx", "txt"], key="jd")
+resume_files = st.file_uploader("📂 Upload Resume(s)", type=["pdf", "docx", "txt"], accept_multiple_files=True, key="resumes")
 
 # ---------- Helper Functions ------------
 
@@ -27,15 +29,49 @@ def extract_text(file):
     if file.name.endswith(".pdf"):
         with pdfplumber.open(file) as pdf:
             for page in pdf.pages:
-                text += page.extract_text() or ""
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
     elif file.name.endswith(".docx"):
         text = docx2txt.process(file)
     elif file.name.endswith(".txt"):
-        text = str(file.read(), "utf-8")
+        text = file.read().decode("utf-8")
     return text.strip()
 
-def similar(a, b):
-    return round(SequenceMatcher(None, a, b).ratio() * 100, 2)
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r'[^\w\s]', ' ', text)
+    tokens = word_tokenize(text)
+    stop_words = set(stopwords.words("english"))
+    filtered = [w for w in tokens if w not in stop_words]
+    return " ".join(filtered)
+
+def tfidf_similarity(text1, text2):
+    vect = TfidfVectorizer()
+    tfidf_matrix = vect.fit_transform([text1, text2])
+    return round(cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0] * 100, 2)
+
+def jaccard_similarity(text1, text2):
+    set1 = set(text1.split())
+    set2 = set(text2.split())
+    if not set1 or not set2:
+        return 0.0
+    return round(len(set1 & set2) / len(set1 | set2) * 100, 2)
+
+def keyword_overlap_score(jd_keywords, resume_text):
+    resume_tokens = set(resume_text.split())
+    match_count = sum(1 for kw in jd_keywords if kw in resume_tokens)
+    return round((match_count / len(jd_keywords)) * 100, 2) if jd_keywords else 0
+
+def compute_combined_score(jd_text, resume_text):
+    clean_jd = clean_text(jd_text)
+    clean_resume = clean_text(resume_text)
+    tfidf_score = tfidf_similarity(clean_jd, clean_resume)
+    jaccard_score = jaccard_similarity(clean_jd, clean_resume)
+    jd_keywords = clean_jd.split()
+    keyword_score = keyword_overlap_score(jd_keywords, clean_resume)
+    combined = (0.5 * tfidf_score) + (0.3 * jaccard_score) + (0.2 * keyword_score)
+    return round(combined, 2)
 
 def extract_name(text, filename=""):
     name = ""
@@ -48,7 +84,6 @@ def extract_name(text, filename=""):
         if found_names:
             name = found_names[0]
         else:
-            # Try extracting from filename
             base = Path(filename).stem
             parts = base.replace("Naukri_", "").split("_")
             for p in parts:
@@ -85,22 +120,21 @@ def convert_df_to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="Candidates")
-        workbook = writer.book
         worksheet = writer.sheets["Candidates"]
         for i, col in enumerate(df.columns):
-            worksheet.set_column(i, i, 20)
+            worksheet.set_column(i, i, 22)
     output.seek(0)
     return output
 
-# ---------- Processing ------------
+# ---------- Main App Logic ------------
 
 if jd_file and resume_files:
     jd_text = extract_text(jd_file)
-
     results = []
+
     for file in resume_files:
         resume_text = extract_text(file)
-        similarity = similar(jd_text, resume_text)
+        score = compute_combined_score(jd_text, resume_text)
         name = extract_name(resume_text, file.name)
         email = extract_email(resume_text)
         phone = extract_phone(resume_text)
@@ -111,7 +145,7 @@ if jd_file and resume_files:
         results.append({
             "Sr. No.": len(results)+1,
             "Name": name,
-            "Similarity (%)": similarity,
+            "Similarity (%)": score,
             "Email": email,
             "Mobile": phone,
             "Location": location,
