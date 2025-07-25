@@ -1,173 +1,113 @@
+import streamlit as st
 import os
 import re
-import streamlit as st
+import docx2txt
+import pdfplumber
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 import pandas as pd
-import fitz  # PyMuPDF
-from docx import Document
 from io import BytesIO
-from fpdf import FPDF
-from sentence_transformers import SentenceTransformer, util
 
-from functools import lru_cache
-
-@lru_cache(maxsize=1)
-def load_model():
-    return SentenceTransformer('all-MiniLM-L6-v2')
+# ---------------------
+# Helper Functions
+# ---------------------
 
 def extract_text_from_pdf(file):
-    with fitz.open(stream=file.read(), filetype="pdf") as doc:
-        return "\n".join(page.get_text() for page in doc)
+    with pdfplumber.open(file) as pdf:
+        return "\n".join([page.extract_text() or "" for page in pdf.pages])
 
 def extract_text_from_docx(file):
-    doc = Document(file)
-    return "\n".join([para.text for para in doc.paragraphs])
-
-def extract_text_from_txt(file):
-    return file.read().decode("utf-8")
+    return docx2txt.process(file)
 
 def extract_text(file):
-    filename = file.name.lower()
-    if filename.endswith(".pdf"):
+    if file.name.endswith(".pdf"):
         return extract_text_from_pdf(file)
-    elif filename.endswith(".docx"):
+    elif file.name.endswith(".docx"):
         return extract_text_from_docx(file)
-    elif filename.endswith(".txt"):
-        return extract_text_from_txt(file)
+    elif file.name.endswith(".txt"):
+        return file.read().decode("utf-8", errors="ignore")
     else:
         return ""
 
-def compute_similarity(jd_text, resume_text):
-    jd_emb = load_model().encode(jd_text, convert_to_tensor=True)
-    resume_emb = load_model().encode(resume_text, convert_to_tensor=True)
-    score = util.cos_sim(jd_emb, resume_emb).item()
-    return round(score * 100, 2)
-
-def generate_remark(similarity, experience, skills_matched=None):
-    if similarity >= 75:
-        return "Highly suitable – strong JD match."
-    elif similarity >= 50:
-        return "Moderately suitable – partial match."
-    else:
-        return "Less suitable – consider alternate role."
-
+# ✅ Improved Name Extraction
 def extract_name(text, filename="Unknown"):
-    # Try from resume content
-    name = ""
-    lines = text.strip().split("\n")[:20]  # Only look at top
+    lines = text.strip().split("\n")[:30]
+    possible_names = []
+
+    blacklist = {'resume', 'curriculum', 'vitae', 'cv', 'product strategy', 'summary', 'contact', 'email', 'mobile', 'phone', 'experience'}
+
     for line in lines:
-        if re.match(r'^[A-Z][a-z]+ [A-Z][a-z]+$', line.strip()):
-            name = line.strip().title()
+        line_clean = line.strip().lower()
+        if any(word in line_clean for word in blacklist):
+            continue
+
+        line = line.strip()
+        if 2 <= len(line.split()) <= 3 and all(word[0].isupper() for word in line.split() if word):
+            possible_names.append(line.title())
             break
 
-    # Fallback to filename (Naukri_JohnDoe5yrs.pdf → John Doe)
-    if not name:
+    if not possible_names:
         name_from_file = os.path.splitext(os.path.basename(filename))[0]
-        parts = re.findall(r'[A-Za-z]+', name_from_file)
+        name_from_file = name_from_file.lower().replace("naukri", "").replace("resume", "").replace("cv", "").strip()
+        parts = re.findall(r'[a-zA-Z]+', name_from_file)
         if len(parts) >= 2:
-            name = f"{parts[0]} {parts[1]}"
+            name = f"{parts[0].capitalize()} {parts[1].capitalize()}"
+        elif len(parts) == 1:
+            name = parts[0].capitalize()
         else:
             name = "Unknown"
+        return name
+    else:
+        return possible_names[0]
 
-    return name.title()
+def calculate_similarity(jd_text, resume_text):
+    vectorizer = TfidfVectorizer(stop_words='english')
+    vectors = vectorizer.fit_transform([jd_text, resume_text])
+    return round(cosine_similarity(vectors[0:1], vectors[1:2])[0][0] * 100, 2)
 
-def extract_candidate_details(text, filename="Unknown"):
-    clean_text = text.replace("\n", " ").replace("\r", " ")
+# ---------------------
+# Streamlit App
+# ---------------------
 
-    name = extract_name(text, filename)
+st.set_page_config(page_title="Smart AI Hiring Assistant", layout="wide")
+st.title("🤖 Smart AI Hiring Assistant")
 
-    email = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clean_text)
-    phone = re.search(r"(?:\+91[-\s]?|0)?[6-9]\d{9}", clean_text)
+company_name = st.text_input("🏢 Enter the Company Name for which you're hiring:")
 
-    experience = ""
-    exp_match = re.search(r"(\d+(?:\.\d+)?)\s+(?:years?|yrs?)\s+of\s+experience", clean_text, re.I)
-    if exp_match:
-        experience = exp_match.group(1)
+col1, col2 = st.columns(2)
 
-    location = ""
-    loc_match = re.search(r"Location[:\-]?\s*(\w+[\w\s,]*)", clean_text, re.I)
-    if loc_match:
-        location = loc_match.group(1).strip()
+with col1:
+    jd_file = st.file_uploader("📄 Upload Job Description (JD)", type=["pdf", "docx", "txt"])
 
-    current_company = ""
-    company_patterns = [
-        r"Currently\s+(?:working|employed)\s+at\s*[:\-]?\s*([A-Za-z0-9 &,.]+)",
-        r"Working\s+at\s*[:\-]?\s*([A-Za-z0-9 &,.]+)",
-        r"Presently\s+working\s+at\s*[:\-]?\s*([A-Za-z0-9 &,.]+)",
-        r"Company\s*[:\-]?\s*([A-Za-z0-9 &,.]+)"
-    ]
-    for pattern in company_patterns:
-        match = re.search(pattern, clean_text, re.I)
-        if match:
-            current_company = match.group(1).strip()
-            break
+with col2:
+    resume_files = st.file_uploader("📂 Upload Resume(s)", accept_multiple_files=True, type=["pdf", "docx", "txt"])
 
-    ctc = ""
-    ctc_match = re.search(r"CTC\s*[:\-]?\s*₹?([\d.,]+)", clean_text, re.I)
-    if ctc_match:
-        ctc = ctc_match.group(1)
+if jd_file and resume_files:
+    jd_text = extract_text(jd_file)
 
-    ectc = ""
-    ectc_match = re.search(r"(?:Expected|ECTC)\s*[:\-]?\s*₹?([\d.,]+)", clean_text, re.I)
-    if ectc_match:
-        ectc = ectc_match.group(1)
+    candidate_data = []
 
-    return {
-        "Name": name,
-        "Email": email.group() if email else "",
-        "Mobile": phone.group() if phone else "",
-        "Experience": experience,
-        "Location": location,
-        "Current Company": current_company,
-        "CTC": ctc,
-        "ECTC": ectc
-    }
+    for resume in resume_files:
+        resume_text = extract_text(resume)
+        name = extract_name(resume_text, filename=resume.name)
+        similarity = calculate_similarity(jd_text, resume_text)
 
-def main():
-    st.set_page_config(layout="wide")
-    st.title("📄 Smart AI Hiring Assistant")
+        candidate_data.append({
+            "Name": name,
+            "Similarity (%)": similarity,
+            "Filename": resume.name,
+        })
 
-    st.markdown("### Step 1: Enter Company Name")
-    company_name = st.text_input("Company you're hiring for", placeholder="E.g., TCS, Accenture, etc.")
+    df = pd.DataFrame(candidate_data).sort_values(by="Similarity (%)", ascending=False).reset_index(drop=True)
 
-    st.markdown("### Step 2: Upload Job Description (JD)")
-    jd_file = st.file_uploader("Upload JD File", type=["pdf", "docx", "txt"])
+    st.markdown("### 📊 Candidate Ranking")
+    st.dataframe(df)
 
-    st.markdown("### Step 3: Upload Candidate Resumes")
-    resumes = st.file_uploader("Upload One or More Resumes", type=["pdf", "docx", "txt"], accept_multiple_files=True)
+    def convert_df_to_excel(df):
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            df.to_excel(writer, index=False, sheet_name="Candidates")
+        return output.getvalue()
 
-    if jd_file and resumes:
-        jd_text = extract_text(jd_file)
-        data = []
-
-        for resume_file in resumes:
-            resume_text = extract_text(resume_file)
-            similarity = compute_similarity(jd_text, resume_text)
-            details = extract_candidate_details(resume_text, resume_file.name)
-            details = {
-                "Name": details["Name"],
-                "Similarity %": similarity,
-                "Email": details["Email"],
-                "Mobile": details["Mobile"],
-                "Experience": details["Experience"],
-                "Location": details["Location"],
-                "Current Company": details["Current Company"],
-                "CTC": details["CTC"],
-                "ECTC": details["ECTC"],
-                "Remarks": generate_remark(similarity, details["Experience"])
-            }
-            data.append(details)
-
-        df = pd.DataFrame(data)
-        df = df.sort_values(by="Similarity %", ascending=False)
-
-        st.markdown("### 📊 Candidate Ranking")
-        st.dataframe(df, use_container_width=True)
-
-        excel_buffer = BytesIO()
-        df.to_excel(excel_buffer, index=False)
-        excel_buffer.seek(0)
-
-        st.download_button("⬇ Download Excel", data=excel_buffer, file_name="ranked_candidates.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-if __name__ == "__main__":
-    main()
+    excel_data = convert_df_to_excel(df)
+    st.download_button("📥 Download Excel", data=excel_data, file_name="ranked_candidates.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
