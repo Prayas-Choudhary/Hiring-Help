@@ -127,4 +127,4 @@ if jd_file and resume_files:
     st.dataframe(df, use_container_width=True)
 
     excel_data = convert_df_to_excel(df)
-    st.download_button("📥 Download Candidate Sheet", data=excel_data, file_name="Smart_AI_Hiring_Candidates.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button("📥 Download Candidate Sheet", data=excel_data, file_name="Smart_AI_Hiring_Candidates_.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
