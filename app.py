@@ -54,15 +54,18 @@ def generate_remark(similarity, experience, skills_matched):
 def extract_candidate_details(text):
     clean_text = text.replace("\n", " ").replace("\r", " ")
 
-    # Extract name (improved)
-    name = ""
-    name_match = re.search(r"Name\s*[:\-]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", clean_text)
-    if name_match:
-        name = name_match.group(1)
-    else:
-        name_match = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", clean_text)
-        if name_match:
-            name = name_match[0]
+   def extract_name(text, filename="Unknown"):
+    lines = text.strip().split("\n")
+    top_text = "\n".join(lines[:20])
+    doc = nlp(top_text)
+
+    for ent in doc.ents:
+        if ent.label_ == "PERSON" and 2 <= len(ent.text.split()) <= 4:
+            return ent.text.strip().title()
+
+    # Fallback: Use cleaned filename as name
+    name_from_file = re.sub(r'[\W_]+', ' ', filename).strip()
+    return " ".join(name_from_file.split()[:3]).title()
 
     # Email & phone
     email = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clean_text)
