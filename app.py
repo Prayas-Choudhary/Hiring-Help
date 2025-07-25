@@ -8,11 +8,7 @@ from io import BytesIO
 from fpdf import FPDF
 from sentence_transformers import SentenceTransformer, util
 
-import torch
-import spacy
 from functools import lru_cache
-
-nlp = spacy.load("en_core_web_sm")
 
 @lru_cache(maxsize=1)
 def load_model():
@@ -46,7 +42,7 @@ def compute_similarity(jd_text, resume_text):
     score = util.cos_sim(jd_emb, resume_emb).item()
     return round(score * 100, 2)
 
-def generate_remark(similarity, experience, skills_matched):
+def generate_remark(similarity, experience, skills_matched=None):
     if similarity >= 75:
         return "Highly suitable – strong JD match."
     elif similarity >= 50:
@@ -55,20 +51,24 @@ def generate_remark(similarity, experience, skills_matched):
         return "Less suitable – consider alternate role."
 
 def extract_name(text, filename="Unknown"):
-    lines = text.strip().split("\n")
-    top_text = "\n".join(lines[:20])
-    doc = nlp(top_text)
+    # Try from resume content
+    name = ""
+    lines = text.strip().split("\n")[:20]  # Only look at top
+    for line in lines:
+        if re.match(r'^[A-Z][a-z]+ [A-Z][a-z]+$', line.strip()):
+            name = line.strip().title()
+            break
 
-    for ent in doc.ents:
-        if ent.label_ == "PERSON" and 2 <= len(ent.text.split()) <= 4:
-            return ent.text.strip().title()
+    # Fallback to filename (Naukri_JohnDoe5yrs.pdf → John Doe)
+    if not name:
+        name_from_file = os.path.splitext(os.path.basename(filename))[0]
+        parts = re.findall(r'[A-Za-z]+', name_from_file)
+        if len(parts) >= 2:
+            name = f"{parts[0]} {parts[1]}"
+        else:
+            name = "Unknown"
 
-    # Fallback: Use filename like Naukri_JohnDoe_10yrs.pdf
-    name_from_file = os.path.splitext(os.path.basename(filename))[0]
-    name_from_file = re.sub(r'naukri[_\-]?', '', name_from_file, flags=re.I)
-    name_from_file = re.sub(r'[^a-zA-Z ]', ' ', name_from_file)
-    name_parts = name_from_file.strip().split()
-    return " ".join(name_parts[:3]).title()
+    return name.title()
 
 def extract_candidate_details(text, filename="Unknown"):
     clean_text = text.replace("\n", " ").replace("\r", " ")
@@ -142,7 +142,7 @@ def main():
         for resume_file in resumes:
             resume_text = extract_text(resume_file)
             similarity = compute_similarity(jd_text, resume_text)
-            details = extract_candidate_details(resume_text, filename=resume_file.name)
+            details = extract_candidate_details(resume_text, resume_file.name)
             details = {
                 "Name": details["Name"],
                 "Similarity %": similarity,
@@ -153,7 +153,7 @@ def main():
                 "Current Company": details["Current Company"],
                 "CTC": details["CTC"],
                 "ECTC": details["ECTC"],
-                "Remarks": generate_remark(similarity, details["Experience"], jd_text)
+                "Remarks": generate_remark(similarity, details["Experience"])
             }
             data.append(details)
 
