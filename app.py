@@ -9,7 +9,10 @@ from fpdf import FPDF
 from sentence_transformers import SentenceTransformer, util
 
 import torch
+import spacy
 from functools import lru_cache
+
+nlp = spacy.load("en_core_web_sm")
 
 @lru_cache(maxsize=1)
 def load_model():
@@ -51,10 +54,7 @@ def generate_remark(similarity, experience, skills_matched):
     else:
         return "Less suitable – consider alternate role."
 
-def extract_candidate_details(text):
-    clean_text = text.replace("\n", " ").replace("\r", " ")
-
-   def extract_name(text, filename="Unknown"):
+def extract_name(text, filename="Unknown"):
     lines = text.strip().split("\n")
     top_text = "\n".join(lines[:20])
     doc = nlp(top_text)
@@ -63,27 +63,31 @@ def extract_candidate_details(text):
         if ent.label_ == "PERSON" and 2 <= len(ent.text.split()) <= 4:
             return ent.text.strip().title()
 
-    # Fallback: Use cleaned filename as name
-    name_from_file = re.sub(r'[\W_]+', ' ', filename).strip()
-    return " ".join(name_from_file.split()[:3]).title()
+    # Fallback: Use filename like Naukri_JohnDoe_10yrs.pdf
+    name_from_file = os.path.splitext(os.path.basename(filename))[0]
+    name_from_file = re.sub(r'naukri[_\-]?', '', name_from_file, flags=re.I)
+    name_from_file = re.sub(r'[^a-zA-Z ]', ' ', name_from_file)
+    name_parts = name_from_file.strip().split()
+    return " ".join(name_parts[:3]).title()
 
-    # Email & phone
+def extract_candidate_details(text, filename="Unknown"):
+    clean_text = text.replace("\n", " ").replace("\r", " ")
+
+    name = extract_name(text, filename)
+
     email = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", clean_text)
     phone = re.search(r"(?:\+91[-\s]?|0)?[6-9]\d{9}", clean_text)
 
-    # Experience
     experience = ""
     exp_match = re.search(r"(\d+(?:\.\d+)?)\s+(?:years?|yrs?)\s+of\s+experience", clean_text, re.I)
     if exp_match:
         experience = exp_match.group(1)
 
-    # Location
     location = ""
     loc_match = re.search(r"Location[:\-]?\s*(\w+[\w\s,]*)", clean_text, re.I)
     if loc_match:
         location = loc_match.group(1).strip()
 
-    # Current Company
     current_company = ""
     company_patterns = [
         r"Currently\s+(?:working|employed)\s+at\s*[:\-]?\s*([A-Za-z0-9 &,.]+)",
@@ -97,7 +101,6 @@ def extract_candidate_details(text):
             current_company = match.group(1).strip()
             break
 
-    # CTC and ECTC
     ctc = ""
     ctc_match = re.search(r"CTC\s*[:\-]?\s*₹?([\d.,]+)", clean_text, re.I)
     if ctc_match:
@@ -139,7 +142,7 @@ def main():
         for resume_file in resumes:
             resume_text = extract_text(resume_file)
             similarity = compute_similarity(jd_text, resume_text)
-            details = extract_candidate_details(resume_text)
+            details = extract_candidate_details(resume_text, filename=resume_file.name)
             details = {
                 "Name": details["Name"],
                 "Similarity %": similarity,
