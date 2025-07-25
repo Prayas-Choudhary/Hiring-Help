@@ -7,6 +7,9 @@ import re
 from difflib import SequenceMatcher
 from io import BytesIO
 from pathlib import Path
+import openai
+
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 st.set_page_config(page_title="Smart AI Hiring Assistant", layout="wide")
 
