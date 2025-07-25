@@ -11,3 +11,4 @@ pdfplumber
 docx2txt
 spacy
 matplotlib
+xlsxwriter
