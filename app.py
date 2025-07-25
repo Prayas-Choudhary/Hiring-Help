@@ -8,6 +8,8 @@ import docx2txt
 import pandas as pd
 import nltk
 import string
+nltk.download('punkt')
+
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
