@@ -1,177 +1,154 @@
 import streamlit as st
 import os
-import base64
-import re
-import io
 import pdfplumber
 import docx2txt
+import base64
+import re
 import pandas as pd
-import nltk
-import string
-nltk.download('punkt')
-
-
+import tempfile
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from nltk.corpus import stopwords, wordnet
-from nltk.tokenize import word_tokenize
-from nltk.stem import WordNetLemmatizer
+from difflib import SequenceMatcher
+from collections import Counter
+import string
 
-# --- Ensure NLTK data is downloaded ---
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
-try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('stopwords')
-try:
-    nltk.data.find('corpora/wordnet')
-except LookupError:
-    nltk.download('wordnet')
+# ------------------- File Text Extraction -------------------
 
-# --- NLP Setup ---
-lemmatizer = WordNetLemmatizer()
-stop_words = set(stopwords.words('english'))
+def extract_text_from_pdf(pdf_file):
+    with pdfplumber.open(pdf_file) as pdf:
+        return "\n".join([page.extract_text() or '' for page in pdf.pages])
 
-# --- Clean and preprocess text ---
-def clean_text(text):
-    text = text.lower()
-    text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r'[^\w\s]', '', text)
-    tokens = word_tokenize(text)
-    tokens = [lemmatizer.lemmatize(word) for word in tokens if word not in stop_words]
-    return ' '.join(tokens)
+def extract_text_from_docx(docx_file):
+    return docx2txt.process(docx_file)
 
-# --- Read Resume File ---
-def extract_text_from_file(file):
+def extract_text(file):
     if file.name.endswith('.pdf'):
-        with pdfplumber.open(file) as pdf:
-            return ' '.join(page.extract_text() or '' for page in pdf.pages)
+        return extract_text_from_pdf(file)
     elif file.name.endswith('.docx'):
-        return docx2txt.process(file)
+        return extract_text_from_docx(file)
     elif file.name.endswith('.txt'):
         return file.read().decode('utf-8')
     else:
         return ''
 
-# --- Extract Info ---
+# ------------------- Cleaning & Tokenizing -------------------
+
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r'[\r\n]+', ' ', text)
+    text = re.sub(r'[^\w\s]', '', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+def tokenize(text):
+    return clean_text(text).split()
+
+# ------------------- Resume Field Extractors -------------------
+
 def extract_email(text):
-    match = re.search(r'[\w\.-]+@[\w\.-]+', text)
+    match = re.search(r'\b[\w.-]+?@\w+?\.\w+?\b', text)
     return match.group(0) if match else ''
 
 def extract_phone(text):
-    match = re.search(r'\b\d{10}\b', text)
+    match = re.search(r'\b(\+91[\s\-]?)?[6789]\d{9}\b', text)
     return match.group(0) if match else ''
 
-def extract_name(text, filename):
-    lines = text.splitlines()
-    for line in lines:
-        words = line.strip().split()
-        if 1 < len(words) <= 5:
-            return line.strip().title()
-    if "naukri_" in filename.lower():
-        return filename.replace("naukri_", "").split('.')[0].replace('_', ' ').title()
-    return "Name Not Found"
-
-def extract_location(text):
-    city_keywords = ['bangalore', 'hyderabad', 'mumbai', 'delhi', 'chennai', 'pune', 'gurgaon', 'noida', 'kolkata', 'lucknow']
-    for word in text.lower().split():
-        if word in city_keywords:
-            return word.title()
-    return ''
-
-def extract_current_company(text):
-    patterns = [r'currently working at (\w+)', r'presently working at (\w+)', r'current company[:\-]?\s*(\w+)']
-    for pattern in patterns:
-        match = re.search(pattern, text.lower())
-        if match:
-            return match.group(1).title()
-    return ''
+def extract_name_from_filename(filename):
+    base = os.path.basename(filename)
+    name = os.path.splitext(base)[0]
+    if 'naukri_' in name.lower():
+        parts = name.split('_')
+        if len(parts) >= 2:
+            return parts[1].title()
+    return name.title()
 
 def extract_experience(text):
-    match = re.search(r'(\d+)\+?\s+years?', text.lower())
-    return match.group(1) + ' years' if match else ''
+    matches = re.findall(r'(\d{4})\s*[-–to]{1,3}\s*(\d{4}|present)', text, re.IGNORECASE)
+    years = []
+    for start, end in matches:
+        try:
+            start, end = int(start), 2025 if 'present' in end.lower() else int(end)
+            if 1900 < start <= end:
+                years.append(end - start)
+        except:
+            continue
+    return f"{sum(years)} years" if years else ''
 
-# --- Similarity Score ---
+def extract_location(text):
+    locations = re.findall(r'\b(?:Mumbai|Delhi|Bangalore|Hyderabad|Pune|Chennai|Noida|Gurgaon|Kolkata|Ahmedabad)\b', text, re.IGNORECASE)
+    return locations[0].title() if locations else ''
+
+def extract_current_company(text):
+    match = re.search(r'(?:currently|presently|working at|employed at)\s+([A-Z][a-zA-Z& ]+)', text, re.IGNORECASE)
+    return match.group(1).strip() if match else ''
+
+# ------------------- Similarity Scoring -------------------
+
+def tfidf_similarity(jd_text, resume_text):
+    vect = TfidfVectorizer()
+    tfidf = vect.fit_transform([jd_text, resume_text])
+    return cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0] * 100
+
+def jaccard_similarity(jd_text, resume_text):
+    a, b = set(tokenize(jd_text)), set(tokenize(resume_text))
+    return (len(a & b) / len(a | b)) * 100 if a and b else 0
+
+def keyword_match_score(jd_text, resume_text):
+    jd_words = Counter(tokenize(jd_text))
+    resume_words = Counter(tokenize(resume_text))
+    common = set(jd_words.keys()) & set(resume_words.keys())
+    return sum(min(jd_words[word], resume_words[word]) for word in common) / max(1, sum(jd_words.values())) * 100
+
 def compute_combined_score(jd_text, resume_text):
     jd_clean = clean_text(jd_text)
-    res_clean = clean_text(resume_text)
+    resume_clean = clean_text(resume_text)
+    tfidf = tfidf_similarity(jd_clean, resume_clean)
+    jaccard = jaccard_similarity(jd_clean, resume_clean)
+    keyword = keyword_match_score(jd_clean, resume_clean)
+    return round((0.5 * tfidf + 0.3 * jaccard + 0.2 * keyword), 2)
 
-    tfidf = TfidfVectorizer()
-    tfidf_matrix = tfidf.fit_transform([jd_clean, res_clean])
-    cosine = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+# ------------------- Streamlit UI -------------------
 
-    set_jd = set(jd_clean.split())
-    set_resume = set(res_clean.split())
-    jaccard = len(set_jd & set_resume) / len(set_jd | set_resume)
-
-    overlap = len(set_jd & set_resume) / len(set_jd) if set_jd else 0
-
-    final_score = (0.5 * cosine + 0.3 * jaccard + 0.2 * overlap) * 100
-    return round(final_score, 2)
-
-# --- Generate Remarks ---
-def generate_remarks(score, exp):
-    try:
-        exp_years = int(re.search(r'\d+', exp).group(0))
-    except:
-        exp_years = 0
-    if score >= 80 and exp_years >= 5:
-        return "Strong match for senior role"
-    elif score >= 60:
-        return "Good match"
-    elif score >= 40:
-        return "Average match"
-    else:
-        return "Weak match"
-
-# --- Streamlit UI ---
-st.set_page_config(page_title="Smart Hiring Assistant", layout="wide")
-st.title("🧠 Smart AI Hiring Assistant (Non-AI Version)")
+st.set_page_config(layout="wide")
+st.title("🧠 Smart AI Hiring Assistant (Bulletproof Version)")
+st.markdown("Upload Job Description and multiple resumes to compare & rank candidates without AI APIs.")
 
 col1, col2 = st.columns(2)
+
 with col1:
-    company_name = st.text_input("Hiring For (Company Name):")
+    company_name = st.text_input("🏢 Company Name")
+    jd_file = st.file_uploader("📄 Upload Job Description (PDF, DOCX, TXT)", type=['pdf', 'docx', 'txt'])
 
 with col2:
-    jd_file = st.file_uploader("Upload Job Description (PDF/DOCX/TXT)", type=['pdf', 'docx', 'txt'])
-
-resume_files = st.file_uploader("Upload Resumes", type=['pdf', 'docx', 'txt'], accept_multiple_files=True)
+    resume_files = st.file_uploader("👤 Upload Candidate Resumes", type=['pdf', 'docx', 'txt'], accept_multiple_files=True)
 
 if jd_file and resume_files:
-    jd_text = extract_text_from_file(jd_file)
-    jd_clean = clean_text(jd_text)
-    results = []
+    jd_text = extract_text(jd_file)
+    data = []
 
     for resume in resume_files:
-        text = extract_text_from_file(resume)
-        clean_resume = clean_text(text)
-        score = compute_combined_score(jd_clean, clean_resume)
-
-        data = {
-            'Name': extract_name(text, resume.name),
-            'Email': extract_email(text),
-            'Phone': extract_phone(text),
-            'Experience': extract_experience(text),
-            'Location': extract_location(text),
-            'Current Company': extract_current_company(text),
-            'Similarity %': score,
-            'Remarks': generate_remarks(score, extract_experience(text)),
+        resume_text = extract_text(resume)
+        if not resume_text:
+            continue
+        filename = resume.name
+        row = {
+            'Name': extract_name_from_filename(filename),
+            'Email': extract_email(resume_text),
+            'Phone': extract_phone(resume_text),
+            'Experience': extract_experience(resume_text),
+            'Location': extract_location(resume_text),
+            'Current Company': extract_current_company(resume_text),
+            'JD-Resume Match %': compute_combined_score(jd_text, resume_text)
         }
-        results.append(data)
+        data.append(row)
 
-    df = pd.DataFrame(results)
-    df = df.sort_values(by='Similarity %', ascending=False).reset_index(drop=True)
-    st.dataframe(df)
+    df = pd.DataFrame(data)
+    df = df.sort_values(by='JD-Resume Match %', ascending=False)
 
-    # Download Excel
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='Results')
-        writer.save()
-    st.download_button("📥 Download Excel", output.getvalue(), file_name='Candidate_Ranking.xlsx')
+    st.subheader("📊 Ranked Candidates")
+    st.dataframe(df.reset_index(drop=True))
 
-else:
-    st.info("Please upload both JD and Resumes to begin analysis.")
+    def convert_df(df):
+        return df.to_excel(index=False, engine='openpyxl')
+
+    st.download_button("📥 Download Excel", data=convert_df(df), file_name="ranked_candidates.xlsx")
