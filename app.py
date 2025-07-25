@@ -148,7 +148,7 @@ if jd_file and resume_files:
     st.subheader("📊 Ranked Candidates")
     st.dataframe(df.reset_index(drop=True))
 
-   def convert_df(df):
+   def convert_df(df)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False)
