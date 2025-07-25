@@ -148,7 +148,12 @@ if jd_file and resume_files:
     st.subheader("📊 Ranked Candidates")
     st.dataframe(df.reset_index(drop=True))
 
-    def convert_df(df):
+   def convert_df(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
+    processed_data = output.getvalue()
+    return processed_data
         return df.to_excel(index=False, engine='openpyxl')
 
     st.download_button("📥 Download Excel", data=convert_df(df), file_name="ranked_candidates.xlsx")
