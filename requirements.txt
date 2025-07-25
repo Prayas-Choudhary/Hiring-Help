@@ -12,4 +12,3 @@ docx2txt
 spacy
 matplotlib
 xlsxwriter
-open.ai
