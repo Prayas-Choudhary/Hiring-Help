@@ -13,7 +13,7 @@ import json
 load_dotenv()
 
 # Set your OpenAI API key securely
-openai.api_key = os.getenv("sk-1234567890abcdef1234567890abcdef12345678") or st.secrets.get("sk-1234567890abcdef1234567890abcdef12345678")
+openai.api_key = os.getenv("sk-1234efgh5678ijkl1234efgh5678ijkl1234efgh") or st.secrets.get("sk-1234efgh5678ijkl1234efgh5678ijkl1234efgh")
 
 # Extract text from DOCX
 def extract_text_from_docx(docx_file):
