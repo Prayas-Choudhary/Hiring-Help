@@ -80,7 +80,7 @@ response = client.chat.completions.create(
 )
 
 ai_result = response.choices[0].message.content.strip()
-    )
+    
     try:
         result = eval(response['choices'][0]['message']['content'])
         return result
