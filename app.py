@@ -68,10 +68,17 @@ Respond in JSON format like this:
   "similarity": "85%"
 }}
 """
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.5
+    from openai import OpenAI
+
+client = OpenAI()
+
+response = client.chat.completions.create(
+    model="gpt-4",
+    messages=[{"role": "user", "content": prompt}],
+    temperature=0.5
+)
+
+ai_result = response.choices[0].message.content.strip()
     )
     try:
         result = eval(response['choices'][0]['message']['content'])
