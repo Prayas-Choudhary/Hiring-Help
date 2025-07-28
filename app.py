@@ -6,15 +6,14 @@ import pdfplumber
 import os
 import re
 from io import BytesIO
-from openai import OpenAI
-
 from dotenv import load_dotenv
+import json
+
+# Load .env variables
 load_dotenv()
 
-openai.api_key = os.getenv("sk-1234567890abcdef1234567890abcdef12345678")
-client = OpenAI(api_key=os.getenv("sk-1234567890abcdef1234567890abcdef12345678"))
 # Set your OpenAI API key securely
-openai.api_key = st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets else os.getenv("OPENAI_API_KEY")
+openai.api_key = os.getenv("sk-1234567890abcdef1234567890abcdef12345678") or st.secrets.get("sk-1234567890abcdef1234567890abcdef12345678")
 
 # Extract text from DOCX
 def extract_text_from_docx(docx_file):
@@ -29,14 +28,14 @@ def extract_text_from_pdf(pdf_file):
             text += page.extract_text() or ""
     return text
 
-# Extract key fields (very basic for now)
+# Extract basic fields
 def extract_basic_fields(text):
     name_match = re.search(r"Name\s*[:\-]?\s*(.*)", text, re.IGNORECASE)
     email_match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
     phone_match = re.search(r"\+?\d[\d\s\-]{8,15}", text)
     company_match = re.search(r"(?:Currently working at|Company)\s*[:\-]?\s*(.*)", text, re.IGNORECASE)
     notice_match = re.search(r"Notice Period\s*[:\-]?\s*(.*)", text, re.IGNORECASE)
-    
+
     return {
         "Name": name_match.group(1).strip() if name_match else "",
         "Email": email_match.group(0) if email_match else "",
@@ -45,60 +44,56 @@ def extract_basic_fields(text):
         "Notice Period": notice_match.group(1).strip() if notice_match else ""
     }
 
-# AI function for review and skill gap
+# AI function
 def get_ai_review_and_similarity(jd_text, resume_text):
     prompt = f"""
 Compare the following Job Description and Candidate Resume.
 
-1. List the top 5 **matching skills**
-2. List 3–5 **missing or weak skills**
-3. Write a 3–4 line **review** about the candidate's fitment for the job.
-4. Estimate the **similarity percentage** between JD and Resume.
+1. List the top 5 matching skills
+2. List 3–5 missing or weak skills
+3. Write a short review about the candidate's fitment for the job.
+4. Estimate similarity percentage.
 
 ### Job Description:
 {jd_text}
 
-### Candidate Resume:
+### Resume:
 {resume_text}
 
-Respond in JSON format like this:
+Respond ONLY in JSON format like this:
 {{
-  "matching_skills": [...],
-  "missing_skills": [...],
-  "review": "...",
-  "similarity": "85%"
+  "matching_skills": ["", "", "", "", ""],
+  "missing_skills": ["", "", ""],
+  "review": "short text",
+  "similarity": "75%"
 }}
 """
-    from openai import OpenAI
 
-client = OpenAI()
-
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[{"role": "user", "content": prompt}],
-    temperature=0.5
-)
-
-ai_result = response.choices[0].message.content.strip()
-    {
     try:
-        result = eval(response['choices'][0]['message']['content'])
+        response = openai.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+        ai_output = response.choices[0].message.content.strip()
+        result = json.loads(ai_output)
         return result
-    except Exception:
+    except Exception as e:
         return {
             "matching_skills": [],
             "missing_skills": [],
-            "review": "Error in AI review",
+            "review": f"AI error: {str(e)}",
             "similarity": "0%"
         }
 
-# Streamlit UI
-st.title("📊 Smart JD–Resume Matching App")
+# ------------------- Streamlit UI -------------------
+st.title("🤖 Smart JD–Resume Matching Assistant")
 
-jd_file = st.file_uploader("Upload Job Description (PDF/DOCX/TXT)", type=["pdf", "docx", "txt"])
-resumes = st.file_uploader("Upload Resumes", type=["pdf", "docx"], accept_multiple_files=True)
+jd_file = st.file_uploader("📄 Upload Job Description (PDF/DOCX/TXT)", type=["pdf", "docx", "txt"])
+resumes = st.file_uploader("📁 Upload Resumes (PDF/DOCX)", type=["pdf", "docx"], accept_multiple_files=True)
 
 if jd_file and resumes:
+    # Read JD
     if jd_file.type == "application/pdf":
         jd_text = extract_text_from_pdf(jd_file)
     elif jd_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
@@ -107,12 +102,13 @@ if jd_file and resumes:
         jd_text = jd_file.read().decode()
 
     results = []
+
     for idx, resume in enumerate(resumes, 1):
         if resume.type == "application/pdf":
             resume_text = extract_text_from_pdf(resume)
         else:
             resume_text = extract_text_from_docx(resume)
-        
+
         fields = extract_basic_fields(resume_text)
         ai_result = get_ai_review_and_similarity(jd_text, resume_text)
 
@@ -129,15 +125,15 @@ if jd_file and resumes:
 
     df = pd.DataFrame(results)
 
-    st.success("✅ Processed Successfully!")
+    st.success("✅ Processing Complete!")
     st.dataframe(df)
 
-    # Download button
+    # Excel download
     def convert_df(df):
         output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
             df.to_excel(writer, index=False)
         return output.getvalue()
 
-    st.download_button("📥 Download Excel", data=convert_df(df), file_name="candidates_report.xlsx")
+    st.download_button("📥 Download Excel Report", data=convert_df(df), file_name="candidates_report.xlsx")
 
