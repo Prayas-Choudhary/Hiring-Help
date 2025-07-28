@@ -14,3 +14,4 @@ matplotlib
 xlsxwriter
 nltk
 openai
+python-dotenv
