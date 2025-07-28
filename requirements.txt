@@ -13,3 +13,4 @@ spacy
 matplotlib
 xlsxwriter
 nltk
+openai
